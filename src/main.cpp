@@ -19,60 +19,86 @@
 #define CE  0b0000000000001000
 #define CO  0b0000000000000100
 #define J   0b0000000000000010
-#define FF  0b0000000000000001
+#define FI  0b0000000000000001
 
-#define BLOCK_SIZE 128
+// flag sets
+#define FLG_Z0C0 0
+#define FLG_Z0C1 1
+#define FLG_Z1C0 2
+#define FLG_Z1C1 3
 
-
-uint16_t commands[] = {
-  MI|CO, RO|II|CE,  0,      0,      0,         0, 0, 0, // 0000 - NOOP
-  MI|CO, RO|II|CE,  IO|MI,  RO|AI,  0,         0, 0, 0, // 0001 - LDA
-  MI|CO, RO|II|CE,  IO|MI,  RO|BI,  EO|AI,     0, 0, 0, // 0010 - ADD
-  MI|CO, RO|II|CE,  IO|MI,  RO|BI,  EO|AI|SU,  0, 0, 0, // 0011 - SUB 
-  MI|CO, RO|II|CE,  IO|MI,  AO|RI,  0,         0, 0, 0, // 0100 - STA
-  MI|CO, RO|II|CE,  IO|AI,  0,      0,         0, 0, 0, // 0101 - LDI (A)
-  MI|CO, RO|II|CE,  IO|J,   0,      0,         0, 0, 0, // 0110 - JMP
-  MI|CO, RO|II|CE,  0,      0,      0,         0, 0, 0, // 0111 - NOOP
-  MI|CO, RO|II|CE,  0,      0,      0,         0, 0, 0, // 1000 - NOOP
-  MI|CO, RO|II|CE,  0,      0,      0,         0, 0, 0, // 1001 - NOOP
-  MI|CO, RO|II|CE,  0,      0,      0,         0, 0, 0, // 1010 - NOOP
-  MI|CO, RO|II|CE,  0,      0,      0,         0, 0, 0, // 1011 - NOOP
-  MI|CO, RO|II|CE,  0,      0,      0,         0, 0, 0, // 1100 - NOOP
-  MI|CO, RO|II|CE,  0,      0,      0,         0, 0, 0, // 1101 - NOOP
-  MI|CO, RO|II|CE,  AO|DI,  0,      0,         0, 0, 0, // 1110 - OUT
-  MI|CO, RO|II|CE,  HLT,    0,      0,         0, 0, 0  // 1111 - HLT
+// commands[instruction][word];
+const PROGMEM uint16_t UCODE_TEMPLATE[16][8] = {
+  { MI|CO, RO|II|CE,  0,      0,      0,            0, 0, 0 },  // 0000 - NOOP
+  { MI|CO, RO|II|CE,  IO|MI,  RO|AI,  0,            0, 0, 0 },  // 0001 - LDA
+  { MI|CO, RO|II|CE,  IO|MI,  RO|BI,  EO|AI|FI,     0, 0, 0 },  // 0010 - ADD
+  { MI|CO, RO|II|CE,  IO|MI,  RO|BI,  EO|AI|SU|FI,  0, 0, 0 },  // 0011 - SUB 
+  { MI|CO, RO|II|CE,  IO|MI,  AO|RI,  0,            0, 0, 0 },  // 0100 - STA
+  { MI|CO, RO|II|CE,  IO|AI,  0,      0,            0, 0, 0 },  // 0101 - LDI
+  { MI|CO, RO|II|CE,  IO|J,   0,      0,            0, 0, 0 },  // 0110 - JMP
+  { MI|CO, RO|II|CE,  0,      0,      0,            0, 0, 0 },  // 0111 - NOOP
+  { MI|CO, RO|II|CE,  0,      0,      0,            0, 0, 0 },  // 1000 - NOOP
+  { MI|CO, RO|II|CE,  0,      0,      0,            0, 0, 0 },  // 1001 - NOOP
+  { MI|CO, RO|II|CE,  0,      0,      0,            0, 0, 0 },  // 1010 - NOOP
+  { MI|CO, RO|II|CE,  0,      0,      0,            0, 0, 0 },  // 1011 - NOOP
+  { MI|CO, RO|II|CE,  0,      0,      0,            0, 0, 0 },  // 1100 - NOOP
+  { MI|CO, RO|II|CE,  0,      0,      0,            0, 0, 0 },  // 1101 - NOOP
+  { MI|CO, RO|II|CE,  AO|DI,  0,      0,            0, 0, 0 },  // 1110 - OUT
+  { MI|CO, RO|II|CE,  HLT,    0,      0,            0, 0, 0 }   // 1111 - HLT
 };
+
+// command variants on [flag][instruction][step]
+uint16_t ucode[4][16][8];
+
+void initUcode() {
+  // ZF = 0; CF = 0;
+  memcpy_P(ucode[FLG_Z0C0], UCODE_TEMPLATE, sizeof(UCODE_TEMPLATE));
+  // ZF = 0; CF = 1;
+  memcpy_P(ucode[FLG_Z0C1], UCODE_TEMPLATE, sizeof(UCODE_TEMPLATE));
+  // ZF = 1; CF = 0;
+  memcpy_P(ucode[FLG_Z1C0], UCODE_TEMPLATE, sizeof(UCODE_TEMPLATE));
+  // ZF = 1; CF = 1;
+  memcpy_P(ucode[FLG_Z1C1], UCODE_TEMPLATE, sizeof(UCODE_TEMPLATE));
+}
 
 
 /* 
-We're programming the first half of each instruction word in the first block of 128,
-and the second half in the second block. Then, the left eeporm will use block 1, 
-and the right eeprom will use block 2. We can program them exactly the same.
+FLAG WEIRDNESS
+Different flags mean we must modify the control words that come after the flag is set.
+This means we can't write everything out as a clean constant.
 */
 
 
 EEPROMProgrammer eeprom;
 
-void writeControl(int instruction, int step, int data) {
-  int address = (instruction << 3) + step;
-  eeprom.writeByte(address, (byte) data);  
-}
 
 void setup() {
   Serial.begin(57600);
+  // initUcode();
   // eeprom.erase(0x00);
 
-  Serial.println("Writing signals...");
 
- 
-  for (int address = 0; address < sizeof(commands)/sizeof(commands[0]); address += 1) {
-    eeprom.writeByte(address, commands[address] >> 8); // block 1
-    eeprom.writeByte(address+BLOCK_SIZE, commands[address]); // block 2
+  Serial.println("Programming EEPROM...");
+  for (int address = 0; address < 1024; address += 1) {
+    int flags    = (address & 0b1100000000) >> 8;
+    int byte_sel = (address & 0b0010000000) >> 7; // which eeprom?
+    int ins      = (address & 0b0001111000) >> 3;
+    int step     = (address & 0b0000000111);
+
+    if (byte_sel) {
+      eeprom.writeByte(address, ucode[flags][ins][step]);
+    } else {
+      eeprom.writeByte(address, ucode[flags][ins][step] >> 8);
+    }
+
+    if (address % 64 == 0) {
+      Serial.print(".");
+    }
   }
  
   Serial.println(" done");
 
-  eeprom.printContents(256 * 1);
+  eeprom.printContents(0, 1024);
 }
 
 

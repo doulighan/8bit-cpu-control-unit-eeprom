@@ -91,10 +91,10 @@ void EEPROMProgrammer::erase(byte nullVal)
     Serial.println(" done");
 }
 
-void EEPROMProgrammer::printContents(int numBytes)
+void EEPROMProgrammer::printContents(int start, int num)
 {
     Serial.println("Reading EEPROM");
-    for (int base = 0; base < numBytes; base += 16) {
+    for (int base = start; base < num; base += 16) {
 
         if (base % 256 == 0) {
             Serial.println("------------------------------------------------------");
